@@ -65,9 +65,11 @@ module fc_galaxian_game(
     logic [PLAYER_MAX_BULLETS-1:0] player_bullet_active;
     logic [9:0] player_bullet_x [PLAYER_MAX_BULLETS];
     logic [9:0] player_bullet_y [PLAYER_MAX_BULLETS];
+    logic signed [4:0] player_bullet_dx [PLAYER_MAX_BULLETS];
     logic [ENEMY_MAX_BULLETS-1:0] enemy_bullet_active;
     logic [9:0] enemy_bullet_x [ENEMY_MAX_BULLETS];
     logic [9:0] enemy_bullet_y [ENEMY_MAX_BULLETS];
+    logic signed [4:0] enemy_bullet_dx [ENEMY_MAX_BULLETS];
 
     logic [ENEMY_COUNT-1:0] enemy_alive;
     logic signed [10:0] enemy_base_x;
@@ -81,6 +83,7 @@ module fc_galaxian_game(
     logic [7:0] fire_cooldown;
     logic [5:0] respawn_timer;
     logic [5:0] attack_cursor;
+    logic [7:0] rng_state;
     logic       fire_prev;
 
     logic key_left, key_right, key_up, key_down, key_fire, key_start, key_restart;
@@ -92,13 +95,12 @@ module fc_galaxian_game(
     logic enemy_fire_candidate_valid;
     int   enemy_fire_candidate_index;
     logic [5:0] enemies_remaining;
-    logic player_bullet_free_valid;
-    int   player_bullet_free_index;
-    logic enemy_bullet_free_valid;
-    int   enemy_bullet_free_index;
     logic [2:0] player_bullet_limit, enemy_bullet_limit;
     logic [2:0] formation_display;
     logic [2:0] player_shape_display, enemy_shape_display;
+    logic [7:0] enemy_move_wait;
+    logic [3:0] enemy_step_x;
+    logic [9:0] enemy_drop_y;
 
     logic [3:0] score_thousands, score_hundreds, score_tens, score_ones;
 
@@ -218,6 +220,128 @@ module fc_galaxian_game(
         end
     endfunction
 
+    function automatic int spread_lane_offset(
+        input int shot,
+        input logic [2:0] total
+    );
+        begin
+            unique case (total)
+                3'd2: spread_lane_offset = (shot == 0) ? -6 : 6;
+                3'd3: begin
+                    unique case (shot)
+                        0: spread_lane_offset = -10;
+                        1: spread_lane_offset = 0;
+                        default: spread_lane_offset = 10;
+                    endcase
+                end
+                3'd4: spread_lane_offset = (shot * 8) - 12;
+                default: spread_lane_offset = 0;
+            endcase
+        end
+    endfunction
+
+    function automatic logic signed [4:0] player_spread_dx(
+        input logic [1:0] pattern,
+        input int shot,
+        input logic [2:0] total
+    );
+        begin
+            player_spread_dx = 5'sd0;
+            unique case (pattern)
+                2'b01: begin
+                    unique case (total)
+                        3'd2: player_spread_dx = (shot == 0) ? -5'sd1 : 5'sd1;
+                        3'd3: player_spread_dx = (shot == 0) ? -5'sd1 : ((shot == 1) ? 5'sd0 : 5'sd1);
+                        3'd4: player_spread_dx = (shot < 2) ? -5'sd1 : 5'sd1;
+                        default: player_spread_dx = 5'sd0;
+                    endcase
+                end
+                2'b10: begin
+                    unique case (total)
+                        3'd2: player_spread_dx = (shot == 0) ? -5'sd2 : 5'sd2;
+                        3'd3: player_spread_dx = (shot == 0) ? -5'sd2 : ((shot == 1) ? 5'sd0 : 5'sd2);
+                        3'd4: begin
+                            unique case (shot)
+                                0: player_spread_dx = -5'sd3;
+                                1: player_spread_dx = -5'sd1;
+                                2: player_spread_dx = 5'sd1;
+                                default: player_spread_dx = 5'sd3;
+                            endcase
+                        end
+                        default: player_spread_dx = 5'sd0;
+                    endcase
+                end
+                2'b11: begin
+                    unique case (total)
+                        3'd2: player_spread_dx = (shot == 0) ? -5'sd3 : 5'sd3;
+                        3'd3: player_spread_dx = (shot == 0) ? -5'sd3 : ((shot == 1) ? 5'sd0 : 5'sd3);
+                        3'd4: begin
+                            unique case (shot)
+                                0: player_spread_dx = -5'sd4;
+                                1: player_spread_dx = -5'sd2;
+                                2: player_spread_dx = 5'sd2;
+                                default: player_spread_dx = 5'sd4;
+                            endcase
+                        end
+                        default: player_spread_dx = 5'sd0;
+                    endcase
+                end
+                default: player_spread_dx = 5'sd0;
+            endcase
+        end
+    endfunction
+
+    function automatic logic signed [4:0] enemy_spread_dx(
+        input logic [1:0] pattern,
+        input int shot,
+        input logic [2:0] total
+    );
+        begin
+            enemy_spread_dx = 5'sd0;
+            unique case (pattern)
+                2'b01: begin
+                    unique case (total)
+                        3'd2: enemy_spread_dx = (shot == 0) ? -5'sd1 : 5'sd1;
+                        3'd3: enemy_spread_dx = (shot == 0) ? -5'sd1 : ((shot == 1) ? 5'sd0 : 5'sd1);
+                        3'd4: enemy_spread_dx = (shot < 2) ? -5'sd1 : 5'sd1;
+                        default: enemy_spread_dx = 5'sd0;
+                    endcase
+                end
+                2'b10: begin
+                    unique case (total)
+                        3'd2: enemy_spread_dx = (shot == 0) ? -5'sd2 : 5'sd2;
+                        3'd3: enemy_spread_dx = (shot == 0) ? -5'sd2 : ((shot == 1) ? 5'sd0 : 5'sd2);
+                        3'd4: begin
+                            unique case (shot)
+                                0: enemy_spread_dx = -5'sd3;
+                                1: enemy_spread_dx = -5'sd1;
+                                2: enemy_spread_dx = 5'sd1;
+                                default: enemy_spread_dx = 5'sd3;
+                            endcase
+                        end
+                        default: enemy_spread_dx = 5'sd0;
+                    endcase
+                end
+                2'b11: begin
+                    unique case (total)
+                        3'd2: enemy_spread_dx = (shot == 0) ? -5'sd3 : 5'sd3;
+                        3'd3: enemy_spread_dx = (shot == 0) ? -5'sd3 : ((shot == 1) ? 5'sd0 : 5'sd3);
+                        3'd4: begin
+                            unique case (shot)
+                                0: enemy_spread_dx = -5'sd4;
+                                1: enemy_spread_dx = -5'sd2;
+                                2: enemy_spread_dx = 5'sd2;
+                                default: enemy_spread_dx = 5'sd4;
+                            endcase
+                        end
+                        default: enemy_spread_dx = 5'sd0;
+                    endcase
+                end
+                default: enemy_spread_dx = 5'sd0;
+            endcase
+        end
+    endfunction
+
     function automatic int enemy_x_pos(input int idx);
         int row, col;
         int offset;
@@ -258,11 +382,61 @@ module fc_galaxian_game(
         end
     endfunction
 
-    function automatic logic [7:0] enemy_move_period(input logic [3:0] value);
+    function automatic logic [7:0] enemy_move_period(
+        input logic [3:0] value,
+        input logic [5:0] remaining,
+        input logic [2:0] jitter
+    );
         logic [3:0] level;
+        int period;
         begin
             level = capped_wave(value);
-            enemy_move_period = 8'd20 - {4'd0, level};
+            period = 20 - level;
+            if (remaining <= 6'd8)
+                period = period - 6;
+            else if (remaining <= 6'd16)
+                period = period - 4;
+            else if (remaining <= 6'd24)
+                period = period - 2;
+            period = period - jitter[1:0];
+            if (period < 5)
+                period = 5;
+            enemy_move_period = period[7:0];
+        end
+    endfunction
+
+    function automatic logic [3:0] enemy_move_step(
+        input logic [3:0] value,
+        input logic [5:0] remaining,
+        input logic [1:0] jitter
+    );
+        logic [3:0] level;
+        int step;
+        begin
+            level = capped_wave(value);
+            step = ENEMY_MOVE_X;
+            if (level >= 4'd5)
+                step = step + 1;
+            if (remaining <= 6'd16)
+                step = step + 1;
+            if (jitter == 2'b11)
+                step = step + 1;
+            enemy_move_step = step[3:0];
+        end
+    endfunction
+
+    function automatic logic [9:0] enemy_drop_step(
+        input logic [3:0] value,
+        input logic [1:0] jitter
+    );
+        logic [3:0] level;
+        int step;
+        begin
+            level = capped_wave(value);
+            step = ENEMY_MOVE_Y;
+            if ((level >= 4'd6) && (jitter == 2'b10))
+                step = step + 4;
+            enemy_drop_step = step[9:0];
         end
     endfunction
 
@@ -303,6 +477,9 @@ module fc_galaxian_game(
     endfunction
 
     assign difficulty_level = capped_wave({1'b0, wave} + {3'b000, switches[17:16]});
+    assign enemy_move_wait = enemy_move_period(difficulty_level, enemies_remaining, rng_state[2:0]);
+    assign enemy_step_x    = enemy_move_step(difficulty_level, enemies_remaining, rng_state[4:3]);
+    assign enemy_drop_y    = enemy_drop_step(difficulty_level, rng_state[6:5]);
 
     always_comb begin
         enemies_remaining = 6'd0;
@@ -313,26 +490,8 @@ module fc_galaxian_game(
         player_hit_enemy_bullet_index = 0;
         enemy_fire_candidate_valid = 1'b0;
         enemy_fire_candidate_index = 0;
-        player_bullet_free_valid = 1'b0;
-        player_bullet_free_index = 0;
-        enemy_bullet_free_valid = 1'b0;
-        enemy_bullet_free_index = 0;
-
-        for (int b = 0; b < PLAYER_MAX_BULLETS; b++) begin
-            if (!player_bullet_free_valid &&
-                (b < player_bullet_limit) && !player_bullet_active[b]) begin
-                player_bullet_free_valid = 1'b1;
-                player_bullet_free_index = b;
-            end
-        end
 
         for (int b = 0; b < ENEMY_MAX_BULLETS; b++) begin
-            if (!enemy_bullet_free_valid &&
-                (b < enemy_bullet_limit) && !enemy_bullet_active[b]) begin
-                enemy_bullet_free_valid = 1'b1;
-                enemy_bullet_free_index = b;
-            end
-
             if (enemy_bullet_active[b] && !player_hit_by_enemy) begin
                 if (overlap(enemy_bullet_x[b], enemy_bullet_y[b], 6, 12,
                             player_x, player_y, PLAYER_W, PLAYER_H)) begin
@@ -386,11 +545,13 @@ module fc_galaxian_game(
             fire_cooldown        <= 8'd0;
             respawn_timer        <= 6'd0;
             attack_cursor        <= 6'd0;
+            rng_state            <= 8'hA5;
             fire_prev            <= 1'b0;
             player_y             <= PLAYER_START_Y;
         end
         else if (frame_tick) begin
             fire_prev <= key_fire;
+            rng_state <= {rng_state[6:0], rng_state[7] ^ rng_state[5] ^ rng_state[4] ^ rng_state[3] ^ keycode[0]};
 
             if (fire_cooldown != 8'd0)
                 fire_cooldown <= fire_cooldown - 8'd1;
@@ -430,11 +591,31 @@ module fc_galaxian_game(
                     else if (key_down && (player_y < PLAYER_MAX_Y - PLAYER_STEP))
                         player_y <= player_y + PLAYER_STEP;
 
-                    if (key_fire && !fire_prev && player_bullet_free_valid && (fire_cooldown == 8'd0)) begin
-                        player_bullet_active[player_bullet_free_index] <= 1'b1;
-                        player_bullet_x[player_bullet_free_index]      <= player_x + (PLAYER_W / 2) - (PLAYER_BULLET_W / 2);
-                        player_bullet_y[player_bullet_free_index]      <= player_y - PLAYER_BULLET_H;
-                        fire_cooldown                                  <= 8'd10;
+                    if (key_fire && !fire_prev && (fire_cooldown == 8'd0)) begin : player_fire_burst
+                        int spawned;
+                        int spawn_x;
+
+                        spawned = 0;
+                        for (int b = 0; b < PLAYER_MAX_BULLETS; b++) begin
+                            if ((b < player_bullet_limit) && !player_bullet_active[b] &&
+                                (spawned < player_bullet_limit)) begin
+                                spawn_x = player_x + (PLAYER_W / 2) - (PLAYER_BULLET_W / 2) +
+                                          spread_lane_offset(spawned, player_bullet_limit);
+                                if (spawn_x < 0)
+                                    spawn_x = 0;
+                                else if (spawn_x > (SCREEN_W - PLAYER_BULLET_W))
+                                    spawn_x = SCREEN_W - PLAYER_BULLET_W;
+
+                                player_bullet_active[b] <= 1'b1;
+                                player_bullet_x[b]      <= spawn_x[9:0];
+                                player_bullet_y[b]      <= player_y - PLAYER_BULLET_H;
+                                player_bullet_dx[b]     <= player_spread_dx(switches[11:10], spawned, player_bullet_limit);
+                                spawned = spawned + 1;
+                            end
+                        end
+
+                        if (spawned != 0)
+                            fire_cooldown <= 8'd10;
                     end
 
                     for (int b = 0; b < PLAYER_MAX_BULLETS; b++) begin
@@ -442,10 +623,14 @@ module fc_galaxian_game(
                             player_bullet_active[b] <= 1'b0;
                         end
                         else if (player_bullet_active[b]) begin
-                            if (player_bullet_y[b] <= 10'd30)
+                            if ((player_bullet_y[b] <= 10'd30) ||
+                                ((player_bullet_dx[b] < 0) && (player_bullet_x[b] <= -player_bullet_dx[b])) ||
+                                ((player_bullet_dx[b] > 0) && (player_bullet_x[b] >= (SCREEN_W - PLAYER_BULLET_W - player_bullet_dx[b]))))
                                 player_bullet_active[b] <= 1'b0;
-                            else
+                            else begin
+                                player_bullet_x[b] <= player_bullet_x[b] + player_bullet_dx[b];
                                 player_bullet_y[b] <= player_bullet_y[b] - 10'd8;
+                            end
                         end
                     end
 
@@ -471,32 +656,33 @@ module fc_galaxian_game(
                             enemy_alive          <= {ENEMY_COUNT{1'b1}};
                             enemy_base_x         <= 11'sd70;
                             enemy_base_y         <= enemy_wave_start_y(wave);
-                            enemy_dir_right      <= 1'b1;
+                            enemy_dir_right      <= rng_state[0];
                             enemy_bullet_active  <= 1'b0;
                             player_bullet_active <= 1'b0;
+                            attack_cursor        <= rng_state[5:0];
                             if (wave != 4'd15)
                                 wave <= wave + 4'd1;
                         end
                     end
 
-                    if (move_timer >= enemy_move_period(difficulty_level)) begin
+                    if (move_timer >= enemy_move_wait) begin
                         move_timer <= 8'd0;
                         if (enemy_dir_right) begin
-                            if ((enemy_base_x + ((ENEMY_COLS - 1) * ENEMY_X_STEP) + ENEMY_W + ENEMY_MOVE_X) >= 11'sd620) begin
+                            if ((enemy_base_x + ((ENEMY_COLS - 1) * ENEMY_X_STEP) + ENEMY_W + enemy_step_x) >= 11'sd620) begin
                                 enemy_dir_right <= 1'b0;
-                                enemy_base_y    <= enemy_base_y + ENEMY_MOVE_Y;
+                                enemy_base_y    <= enemy_base_y + enemy_drop_y;
                             end
                             else begin
-                                enemy_base_x <= enemy_base_x + ENEMY_MOVE_X;
+                                enemy_base_x <= enemy_base_x + enemy_step_x;
                             end
                         end
                         else begin
                             if (enemy_base_x <= 11'sd20) begin
                                 enemy_dir_right <= 1'b1;
-                                enemy_base_y    <= enemy_base_y + ENEMY_MOVE_Y;
+                                enemy_base_y    <= enemy_base_y + enemy_drop_y;
                             end
                             else begin
-                                enemy_base_x <= enemy_base_x - ENEMY_MOVE_X;
+                                enemy_base_x <= enemy_base_x - enemy_step_x;
                             end
                         end
                     end
@@ -509,10 +695,14 @@ module fc_galaxian_game(
                             enemy_bullet_active[b] <= 1'b0;
                         end
                         else if (enemy_bullet_active[b]) begin
-                            if (enemy_bullet_y[b] >= SCREEN_H - 12)
+                            if ((enemy_bullet_y[b] >= SCREEN_H - 12) ||
+                                ((enemy_bullet_dx[b] < 0) && (enemy_bullet_x[b] <= -enemy_bullet_dx[b])) ||
+                                ((enemy_bullet_dx[b] > 0) && (enemy_bullet_x[b] >= (SCREEN_W - 6 - enemy_bullet_dx[b]))))
                                 enemy_bullet_active[b] <= 1'b0;
-                            else
+                            else begin
+                                enemy_bullet_x[b] <= enemy_bullet_x[b] + enemy_bullet_dx[b];
                                 enemy_bullet_y[b] <= enemy_bullet_y[b] + enemy_bullet_speed(difficulty_level);
+                            end
                         end
                     end
 
@@ -531,11 +721,33 @@ module fc_galaxian_game(
                     end
                     else if (enemy_fire_timer >= enemy_fire_period(difficulty_level)) begin
                         enemy_fire_timer <= 8'd0;
-                        if (enemy_fire_candidate_valid && enemy_bullet_free_valid) begin
-                            enemy_bullet_active[enemy_bullet_free_index] <= 1'b1;
-                            enemy_bullet_x[enemy_bullet_free_index]      <= enemy_x_pos(enemy_fire_candidate_index) + (ENEMY_W / 2);
-                            enemy_bullet_y[enemy_bullet_free_index]      <= enemy_y_pos(enemy_fire_candidate_index) + ENEMY_H;
-                            attack_cursor                                <= enemy_fire_candidate_index[5:0] + 6'd1;
+                        if (enemy_fire_candidate_valid) begin : enemy_fire_burst
+                            int spawned;
+                            int spawn_x;
+
+                            spawned = 0;
+                            for (int b = 0; b < ENEMY_MAX_BULLETS; b++) begin
+                                if ((b < enemy_bullet_limit) && !enemy_bullet_active[b] &&
+                                    (spawned < enemy_bullet_limit)) begin
+                                    spawn_x = enemy_x_pos(enemy_fire_candidate_index) + (ENEMY_W / 2) - 3 +
+                                              spread_lane_offset(spawned, enemy_bullet_limit);
+                                    if (spawn_x < 0)
+                                        spawn_x = 0;
+                                    else if (spawn_x > (SCREEN_W - 6))
+                                        spawn_x = SCREEN_W - 6;
+
+                                    enemy_bullet_active[b] <= 1'b1;
+                                    enemy_bullet_x[b]      <= spawn_x[9:0];
+                                    enemy_bullet_y[b]      <= enemy_y_pos(enemy_fire_candidate_index) + ENEMY_H;
+                                    enemy_bullet_dx[b]     <= enemy_spread_dx(switches[7:6], spawned, enemy_bullet_limit);
+                                    spawned = spawned + 1;
+                                end
+                            end
+
+                            if (spawned != 0)
+                                attack_cursor <= enemy_fire_candidate_index[5:0] + 6'd1 + {4'd0, rng_state[1:0]};
+                            else
+                                attack_cursor <= enemy_fire_candidate_index[5:0] + 6'd1;
                         end
                     end
                     else begin
