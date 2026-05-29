@@ -97,6 +97,7 @@ module fc_galaxian_game(
     logic enemy_bullet_free_valid;
     int   enemy_bullet_free_index;
     logic [2:0] player_bullet_limit, enemy_bullet_limit;
+    logic [2:0] formation_display;
 
     logic [3:0] score_thousands, score_hundreds, score_tens, score_ones;
 
@@ -109,6 +110,7 @@ module fc_galaxian_game(
     assign key_restart = (keycode == 8'h15); // R
     assign player_bullet_limit = {1'b0, switches[9:8]} + 3'd1;
     assign enemy_bullet_limit  = {1'b0, switches[13:12]} + 3'd1;
+    assign formation_display   = {1'b0, switches[15:14]} + 3'd1;
 
     vga_controller vga_ctrl (
         .Clk       (clk),
@@ -166,14 +168,36 @@ module fc_galaxian_game(
     endfunction
 
     function automatic int enemy_x_pos(input int idx);
+        int row, col;
+        int offset;
         begin
-            enemy_x_pos = enemy_base_x + (idx % ENEMY_COLS) * ENEMY_X_STEP;
+            row = idx / ENEMY_COLS;
+            col = idx % ENEMY_COLS;
+            offset = 0;
+            unique case (switches[15:14])
+                2'b01: offset = ((row[0] ^ wave[0]) != 0) ? 14 : -14;
+                2'b10: offset = ((col[1:0] == wave[1:0]) || (((col + 2) & 3) == wave[1:0])) ? 10 : -6;
+                2'b11: offset = (row < 2) ? (12 - (row * 8)) : ((row * 8) - 20);
+                default: offset = 0;
+            endcase
+            enemy_x_pos = enemy_base_x + col * ENEMY_X_STEP + offset;
         end
     endfunction
 
     function automatic int enemy_y_pos(input int idx);
+        int row, col;
+        int offset;
         begin
-            enemy_y_pos = enemy_base_y + (idx / ENEMY_COLS) * ENEMY_Y_STEP;
+            row = idx / ENEMY_COLS;
+            col = idx % ENEMY_COLS;
+            offset = 0;
+            unique case (switches[15:14])
+                2'b01: offset = ((col[0] ^ wave[0]) != 0) ? 4 : -4;
+                2'b10: offset = ((col[1:0] == wave[1:0]) || (((col + 2) & 3) == wave[1:0])) ? 12 : -2;
+                2'b11: offset = (col < 4) ? (col * 2) : ((7 - col) * 2);
+                default: offset = 0;
+            endcase
+            enemy_y_pos = enemy_base_y + row * ENEMY_Y_STEP + offset;
         end
     endfunction
 
@@ -212,6 +236,18 @@ module fc_galaxian_game(
         begin
             level = capped_wave(value);
             enemy_wave_start_y = 10'd72 + ({6'd0, level} << 2);
+        end
+    endfunction
+
+    function automatic logic [6:0] decimal_tens_char(input logic [3:0] value);
+        begin
+            decimal_tens_char = (value >= 4'd10) ? 7'd49 : 7'd48;
+        end
+    endfunction
+
+    function automatic logic [6:0] decimal_ones_char(input logic [3:0] value);
+        begin
+            decimal_ones_char = (value >= 4'd10) ? 7'd48 : (7'd48 + {3'd0, value});
         end
     endfunction
 
@@ -757,6 +793,7 @@ module fc_galaxian_game(
     logic enemy_pixel, enemy_eye_pixel;
     logic title_pixel, start_pixel, gameover_pixel, score_label_pixel, lives_label_pixel;
     logic score_digit_pixel, final_score_label_pixel, final_score_digit_pixel, life_icon_pixel;
+    logic hud_pixel;
     logic [3:0] px_red, px_green, px_blue;
 
     always_comb begin
@@ -776,6 +813,7 @@ module fc_galaxian_game(
         final_score_label_pixel = 1'b0;
         final_score_digit_pixel = 1'b0;
         life_icon_pixel     = 1'b0;
+        hud_pixel           = 1'b0;
 
         star_pixel = (draw_y > 10'd32) &&
                      (((draw_x[5:0] == {draw_y[3:0], 2'b01}) && draw_y[0]) ||
@@ -823,6 +861,17 @@ module fc_galaxian_game(
             char_pixel(7'd48 + score_tens,      130, 8, 1, draw_x, draw_y) ||
             char_pixel(7'd48 + score_ones,      146, 8, 1, draw_x, draw_y);
 
+        hud_pixel =
+            char_pixel(7'd68,                               200, 8, 1, draw_x, draw_y) ||
+            char_pixel(decimal_tens_char(difficulty_level), 216, 8, 1, draw_x, draw_y) ||
+            char_pixel(decimal_ones_char(difficulty_level), 232, 8, 1, draw_x, draw_y) ||
+            char_pixel(7'd70,                               264, 8, 1, draw_x, draw_y) ||
+            char_pixel(7'd48 + {4'd0, formation_display},   280, 8, 1, draw_x, draw_y) ||
+            char_pixel(7'd69,                               312, 8, 1, draw_x, draw_y) ||
+            char_pixel(7'd48 + {4'd0, enemy_bullet_limit},  328, 8, 1, draw_x, draw_y) ||
+            char_pixel(7'd67,                               360, 8, 1, draw_x, draw_y) ||
+            char_pixel(7'd48 + {4'd0, player_bullet_limit}, 376, 8, 1, draw_x, draw_y);
+
         final_score_label_pixel = msg_pixel(5, 144, 258, 2, draw_x, draw_y);
         final_score_digit_pixel =
             char_pixel(7'd48 + score_thousands, 256, 320, 2, draw_x, draw_y) ||
@@ -868,7 +917,7 @@ module fc_galaxian_game(
             px_green = 4'hF;
             px_blue  = 4'hF;
         end
-        else if (score_label_pixel || lives_label_pixel || score_digit_pixel || life_icon_pixel) begin
+        else if (score_label_pixel || lives_label_pixel || score_digit_pixel || life_icon_pixel || hud_pixel) begin
             px_red   = 4'h6;
             px_green = 4'hF;
             px_blue  = 4'hD;
