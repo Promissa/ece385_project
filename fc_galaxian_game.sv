@@ -98,6 +98,7 @@ module fc_galaxian_game(
     int   enemy_bullet_free_index;
     logic [2:0] player_bullet_limit, enemy_bullet_limit;
     logic [2:0] formation_display;
+    logic [2:0] player_shape_display, enemy_shape_display;
 
     logic [3:0] score_thousands, score_hundreds, score_tens, score_ones;
 
@@ -111,6 +112,8 @@ module fc_galaxian_game(
     assign player_bullet_limit = {1'b0, switches[9:8]} + 3'd1;
     assign enemy_bullet_limit  = {1'b0, switches[13:12]} + 3'd1;
     assign formation_display   = {1'b0, switches[15:14]} + 3'd1;
+    assign player_shape_display = {1'b0, switches[11:10]} + 3'd1;
+    assign enemy_shape_display  = {1'b0, switches[7:6]} + 3'd1;
 
     vga_controller vga_ctrl (
         .Clk       (clk),
@@ -164,6 +167,54 @@ module fc_galaxian_game(
         begin
             overlap = (ax < (bx + bw)) && ((ax + aw) > bx) &&
                       (ay < (by + bh)) && ((ay + ah) > by);
+        end
+    endfunction
+
+    function automatic logic player_bullet_shape_pixel(
+        input logic [1:0] shape,
+        input int px,
+        input int py,
+        input int x0,
+        input int y0
+    );
+        int dx, dy;
+        begin
+            dx = px - x0;
+            dy = py - y0;
+            player_bullet_shape_pixel = 1'b0;
+            if ((dx >= 0) && (dx < PLAYER_BULLET_W) &&
+                (dy >= 0) && (dy < PLAYER_BULLET_H)) begin
+                unique case (shape)
+                    2'b01: player_bullet_shape_pixel = (dx >= 1) && (dx <= 2);
+                    2'b10: player_bullet_shape_pixel = (dx == 0) || (dx == 3) || ((dy >= 4) && (dy <= 6));
+                    2'b11: player_bullet_shape_pixel = ((dy < 3) || (dy > 8)) ? ((dx >= 1) && (dx <= 2)) : 1'b1;
+                    default: player_bullet_shape_pixel = 1'b1;
+                endcase
+            end
+        end
+    endfunction
+
+    function automatic logic enemy_bullet_shape_pixel(
+        input logic [1:0] shape,
+        input int px,
+        input int py,
+        input int x0,
+        input int y0
+    );
+        int dx, dy;
+        begin
+            dx = px - x0;
+            dy = py - y0;
+            enemy_bullet_shape_pixel = 1'b0;
+            if ((dx >= 0) && (dx < 6) && (dy >= 0) && (dy < 12)) begin
+                unique case (shape)
+                    2'b01: enemy_bullet_shape_pixel = (dx >= 2) && (dx <= 3);
+                    2'b10: enemy_bullet_shape_pixel = (dx == (dy >> 1)) || (dx == (5 - (dy >> 1)));
+                    2'b11: enemy_bullet_shape_pixel = ((dy < 2) || (dy > 9)) ? ((dx >= 2) && (dx <= 3)) :
+                                                       ((dx >= 1) && (dx <= 4));
+                    default: enemy_bullet_shape_pixel = 1'b1;
+                endcase
+            end
         end
     endfunction
 
@@ -829,13 +880,15 @@ module fc_galaxian_game(
         for (int b = 0; b < PLAYER_MAX_BULLETS; b++) begin
             if (player_bullet_active[b])
                 player_bullet_pixel = player_bullet_pixel ||
-                    rect(draw_x, draw_y, player_bullet_x[b], player_bullet_y[b], PLAYER_BULLET_W, PLAYER_BULLET_H);
+                    player_bullet_shape_pixel(switches[11:10], draw_x, draw_y,
+                                              player_bullet_x[b], player_bullet_y[b]);
         end
 
         for (int b = 0; b < ENEMY_MAX_BULLETS; b++) begin
             if (enemy_bullet_active[b])
                 enemy_bullet_pixel = enemy_bullet_pixel ||
-                    rect(draw_x, draw_y, enemy_bullet_x[b], enemy_bullet_y[b], 6, 12);
+                    enemy_bullet_shape_pixel(switches[7:6], draw_x, draw_y,
+                                             enemy_bullet_x[b], enemy_bullet_y[b]);
         end
 
         for (int i = 0; i < ENEMY_COUNT; i++) begin
@@ -870,7 +923,11 @@ module fc_galaxian_game(
             char_pixel(7'd69,                               312, 8, 1, draw_x, draw_y) ||
             char_pixel(7'd48 + {4'd0, enemy_bullet_limit},  328, 8, 1, draw_x, draw_y) ||
             char_pixel(7'd67,                               360, 8, 1, draw_x, draw_y) ||
-            char_pixel(7'd48 + {4'd0, player_bullet_limit}, 376, 8, 1, draw_x, draw_y);
+            char_pixel(7'd48 + {4'd0, player_bullet_limit}, 376, 8, 1, draw_x, draw_y) ||
+            char_pixel(7'd80,                               200, 24, 1, draw_x, draw_y) ||
+            char_pixel(7'd48 + {4'd0, player_shape_display}, 216, 24, 1, draw_x, draw_y) ||
+            char_pixel(7'd66,                               248, 24, 1, draw_x, draw_y) ||
+            char_pixel(7'd48 + {4'd0, enemy_shape_display}, 264, 24, 1, draw_x, draw_y);
 
         final_score_label_pixel = msg_pixel(5, 144, 258, 2, draw_x, draw_y);
         final_score_digit_pixel =
