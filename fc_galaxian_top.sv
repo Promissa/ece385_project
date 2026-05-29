@@ -8,7 +8,9 @@
 module fc_galaxian_top(
     input               CLOCK_50,
     input        [3:0]  KEY,
-    output logic [6:0]  HEX0, HEX1,
+    input        [17:0] SW,
+    output logic [6:0]  HEX0, HEX1, HEX2, HEX3,
+                        HEX4, HEX5, HEX6, HEX7,
 
     // CY7C67200 USB-OTG/HPI interface for keyboard support
     inout  wire  [15:0] OTG_DATA,
@@ -49,7 +51,7 @@ module fc_galaxian_top(
     logic       clk;
     logic       reset_n;
     logic [7:0] keycode;
-    logic [7:0] keycode_display;
+    logic [3:0] difficulty_level;
 
     logic [1:0]  hpi_addr;
     logic [15:0] hpi_data_in, hpi_data_out;
@@ -70,13 +72,6 @@ module fc_galaxian_top(
     assign VGA_R = {game_red, game_red};
     assign VGA_G = {game_green, game_green};
     assign VGA_B = {game_blue, game_blue};
-
-    always_ff @(posedge clk) begin
-        if (~reset_n)
-            keycode_display <= 8'h00;
-        else if (keycode != 8'h00)
-            keycode_display <= keycode;
-    end
 
     hpi_io_intf hpi_io_inst (
         .Clk              (clk),
@@ -128,43 +123,28 @@ module fc_galaxian_top(
     );
 
     fc_galaxian_game game (
-        .clk        (clk),
-        .reset_n    (reset_n),
-        .keycode    (keycode),
-        .red        (game_red),
-        .green      (game_green),
-        .blue       (game_blue),
-        .hs         (VGA_HS),
-        .vs         (VGA_VS),
-        .pixel_clk  (VGA_CLK),
-        .blank      (VGA_BLANK_N),
-        .sync       (VGA_SYNC_N)
+        .clk              (clk),
+        .reset_n          (reset_n),
+        .keycode          (keycode),
+        .switches         (SW),
+        .difficulty_level (difficulty_level),
+        .red              (game_red),
+        .green            (game_green),
+        .blue             (game_blue),
+        .hs               (VGA_HS),
+        .vs               (VGA_VS),
+        .pixel_clk        (VGA_CLK),
+        .blank            (VGA_BLANK_N),
+        .sync             (VGA_SYNC_N)
     );
 
-    function automatic logic [6:0] hex7(input logic [3:0] value);
-        begin
-            unique case (value)
-                4'h0: hex7 = 7'b1000000;
-                4'h1: hex7 = 7'b1111001;
-                4'h2: hex7 = 7'b0100100;
-                4'h3: hex7 = 7'b0110000;
-                4'h4: hex7 = 7'b0011001;
-                4'h5: hex7 = 7'b0010010;
-                4'h6: hex7 = 7'b0000010;
-                4'h7: hex7 = 7'b1111000;
-                4'h8: hex7 = 7'b0000000;
-                4'h9: hex7 = 7'b0010000;
-                4'hA: hex7 = 7'b0001000;
-                4'hB: hex7 = 7'b0000011;
-                4'hC: hex7 = 7'b1000110;
-                4'hD: hex7 = 7'b0100001;
-                4'hE: hex7 = 7'b0000110;
-                default: hex7 = 7'b0001110;
-            endcase
-        end
-    endfunction
-
-    assign HEX0 = hex7(keycode_display[3:0]);
-    assign HEX1 = hex7(keycode_display[7:4]);
+    HexDriver hex0 (.In0({2'b00, SW[9:8]} + 4'd1),  .Out0(HEX0)); // player bullet count preview
+    HexDriver hex1 (.In0(4'hC),                     .Out0(HEX1)); // player config
+    HexDriver hex2 (.In0({2'b00, SW[13:12]} + 4'd1), .Out0(HEX2)); // enemy bullet count preview
+    HexDriver hex3 (.In0(4'hE),                     .Out0(HEX3)); // enemy config
+    HexDriver hex4 (.In0({2'b00, SW[15:14]}),       .Out0(HEX4)); // formation mode preview
+    HexDriver hex5 (.In0(4'hF),                     .Out0(HEX5)); // formation
+    HexDriver hex6 (.In0(difficulty_level),         .Out0(HEX6)); // effective difficulty
+    HexDriver hex7 (.In0(4'hD),                     .Out0(HEX7)); // difficulty
 
 endmodule

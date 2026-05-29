@@ -1125,6 +1125,7 @@ set_global_assignment -name QIP_FILE lab9_soc/synthesis/lab9_soc.qip
 set_global_assignment -name SYSTEMVERILOG_FILE hpi_io_intf.sv
 set_global_assignment -name SYSTEMVERILOG_FILE vga_text_avl_interface.sv
 set_global_assignment -name SYSTEMVERILOG_FILE VGA_controller.sv
+set_global_assignment -name SYSTEMVERILOG_FILE HexDriver.sv
 set_global_assignment -name SYSTEMVERILOG_FILE fc_galaxian_game.sv
 set_global_assignment -name SYSTEMVERILOG_FILE fc_galaxian_top.sv
 set_global_assignment -name SYSTEMVERILOG_FILE font_rom.sv

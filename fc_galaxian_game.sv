@@ -2,8 +2,9 @@
 // Minimal playable FC Galaxian-inspired VGA game.
 //
 // Controls from USB keyboard HID keycodes:
-//   Left/Right arrows or A/D: move
-//   Space/Up/W: fire
+//   Left/Right arrows or A/D: move horizontally
+//   Up/Down arrows or W/S: move vertically
+//   Space: fire
 //   Enter/Space: start
 //   R: restart after game over
 //-------------------------------------------------------------------------
@@ -12,7 +13,9 @@ module fc_galaxian_game(
     input  logic       clk,
     input  logic       reset_n,
     input  logic [7:0] keycode,
+    input  logic [17:0] switches,
 
+    output logic [3:0] difficulty_level,
     output logic [3:0] red,
     output logic [3:0] green,
     output logic [3:0] blue,
@@ -27,7 +30,9 @@ module fc_galaxian_game(
     localparam int SCREEN_H        = 480;
     localparam int PLAYER_W        = 32;
     localparam int PLAYER_H        = 18;
-    localparam int PLAYER_Y        = 432;
+    localparam int PLAYER_START_Y  = 432;
+    localparam int PLAYER_MIN_Y    = 344;
+    localparam int PLAYER_MAX_Y    = 452;
     localparam int PLAYER_STEP     = 5;
     localparam int PLAYER_BULLET_W = 4;
     localparam int PLAYER_BULLET_H = 12;
@@ -54,7 +59,7 @@ module fc_galaxian_game(
     logic [9:0] draw_x_d, draw_y_d;
     logic       frame_tick;
 
-    logic [9:0] player_x;
+    logic [9:0] player_x, player_y;
     logic       player_bullet_active;
     logic [9:0] player_bullet_x, player_bullet_y;
     logic       enemy_bullet_active;
@@ -74,7 +79,7 @@ module fc_galaxian_game(
     logic [5:0] attack_cursor;
     logic       fire_prev;
 
-    logic key_left, key_right, key_fire, key_start, key_restart;
+    logic key_left, key_right, key_up, key_down, key_fire, key_start, key_restart;
     logic bullet_hit_enemy;
     int   bullet_hit_index;
     logic enemy_fire_candidate_valid;
@@ -85,7 +90,9 @@ module fc_galaxian_game(
 
     assign key_left    = (keycode == 8'h50) || (keycode == 8'h04); // left, A
     assign key_right   = (keycode == 8'h4F) || (keycode == 8'h07); // right, D
-    assign key_fire    = (keycode == 8'h2C) || (keycode == 8'h52) || (keycode == 8'h1A); // space, up, W
+    assign key_up      = (keycode == 8'h52) || (keycode == 8'h1A); // up, W
+    assign key_down    = (keycode == 8'h51) || (keycode == 8'h16); // down, S
+    assign key_fire    = (keycode == 8'h2C); // space
     assign key_start   = (keycode == 8'h28) || (keycode == 8'h58) || key_fire; // enter, keypad enter, or fire
     assign key_restart = (keycode == 8'h15); // R
 
@@ -156,9 +163,9 @@ module fc_galaxian_game(
         end
     endfunction
 
-    function automatic logic [3:0] capped_wave(input logic [3:0] value);
+    function automatic logic [3:0] capped_wave(input logic [4:0] value);
         begin
-            capped_wave = (value > 4'd10) ? 4'd10 : value;
+            capped_wave = (value > 5'd10) ? 4'd10 : value[3:0];
         end
     endfunction
 
@@ -193,6 +200,8 @@ module fc_galaxian_game(
             enemy_wave_start_y = 10'd72 + ({6'd0, level} << 2);
         end
     endfunction
+
+    assign difficulty_level = capped_wave({1'b0, wave} + {3'b000, switches[17:16]});
 
     always_comb begin
         enemies_remaining = 6'd0;
@@ -243,6 +252,7 @@ module fc_galaxian_game(
             respawn_timer        <= 6'd0;
             attack_cursor        <= 6'd0;
             fire_prev            <= 1'b0;
+            player_y             <= PLAYER_START_Y;
         end
         else if (frame_tick) begin
             fire_prev <= key_fire;
@@ -253,6 +263,7 @@ module fc_galaxian_game(
             unique case (state)
                 ST_TITLE: begin
                     player_x             <= 10'd304;
+                    player_y             <= PLAYER_START_Y;
                     player_bullet_active <= 1'b0;
                     enemy_bullet_active  <= 1'b0;
                     enemy_alive          <= {ENEMY_COUNT{1'b1}};
@@ -279,10 +290,15 @@ module fc_galaxian_game(
                     else if (key_right && (player_x < SCREEN_W - PLAYER_W - PLAYER_STEP))
                         player_x <= player_x + PLAYER_STEP;
 
+                    if (key_up && (player_y > PLAYER_MIN_Y + PLAYER_STEP))
+                        player_y <= player_y - PLAYER_STEP;
+                    else if (key_down && (player_y < PLAYER_MAX_Y - PLAYER_STEP))
+                        player_y <= player_y + PLAYER_STEP;
+
                     if (key_fire && !fire_prev && !player_bullet_active && (fire_cooldown == 8'd0)) begin
                         player_bullet_active <= 1'b1;
                         player_bullet_x      <= player_x + (PLAYER_W / 2) - (PLAYER_BULLET_W / 2);
-                        player_bullet_y      <= PLAYER_Y - PLAYER_BULLET_H;
+                        player_bullet_y      <= player_y - PLAYER_BULLET_H;
                         fire_cooldown        <= 8'd10;
                     end
                     else if (player_bullet_active) begin
@@ -322,7 +338,7 @@ module fc_galaxian_game(
                         end
                     end
 
-                    if (move_timer >= enemy_move_period(wave)) begin
+                    if (move_timer >= enemy_move_period(difficulty_level)) begin
                         move_timer <= 8'd0;
                         if (enemy_dir_right) begin
                             if ((enemy_base_x + ((ENEMY_COLS - 1) * ENEMY_X_STEP) + ENEMY_W + ENEMY_MOVE_X) >= 11'sd620) begin
@@ -352,11 +368,11 @@ module fc_galaxian_game(
                             enemy_bullet_active <= 1'b0;
                         end
                         else begin
-                            enemy_bullet_y <= enemy_bullet_y + enemy_bullet_speed(wave);
+                            enemy_bullet_y <= enemy_bullet_y + enemy_bullet_speed(difficulty_level);
                         end
 
                         if (overlap(enemy_bullet_x, enemy_bullet_y, 6, 12,
-                                    player_x, PLAYER_Y, PLAYER_W, PLAYER_H)) begin
+                                    player_x, player_y, PLAYER_W, PLAYER_H)) begin
                             enemy_bullet_active <= 1'b0;
                             player_bullet_active <= 1'b0;
                             if (lives <= 4'd1) begin
@@ -370,7 +386,7 @@ module fc_galaxian_game(
                             end
                         end
                     end
-                    else if (enemy_fire_timer >= enemy_fire_period(wave)) begin
+                    else if (enemy_fire_timer >= enemy_fire_period(difficulty_level)) begin
                         enemy_fire_timer <= 8'd0;
                         if (enemy_fire_candidate_valid) begin
                             enemy_bullet_active <= 1'b1;
@@ -383,7 +399,7 @@ module fc_galaxian_game(
                         enemy_fire_timer <= enemy_fire_timer + 8'd1;
                     end
 
-                    if ((enemy_base_y + ((ENEMY_ROWS - 1) * ENEMY_Y_STEP) + ENEMY_H) >= PLAYER_Y) begin
+                    if ((enemy_base_y + ((ENEMY_ROWS - 1) * ENEMY_Y_STEP) + ENEMY_H) >= player_y) begin
                         lives <= 4'd0;
                         state <= ST_GAME_OVER;
                     end
@@ -391,6 +407,7 @@ module fc_galaxian_game(
 
                 ST_LIFE_LOST: begin
                     player_x             <= 10'd304;
+                    player_y             <= PLAYER_START_Y;
                     player_bullet_active <= 1'b0;
                     enemy_bullet_active  <= 1'b0;
 
@@ -405,6 +422,7 @@ module fc_galaxian_game(
                     enemy_bullet_active  <= 1'b0;
                     if (key_restart || key_start) begin
                         player_x             <= 10'd304;
+                        player_y             <= PLAYER_START_Y;
                         player_bullet_active <= 1'b0;
                         enemy_bullet_active  <= 1'b0;
                         enemy_alive          <= {ENEMY_COUNT{1'b1}};
@@ -708,11 +726,11 @@ module fc_galaxian_game(
                       ((draw_x[6:1] == (draw_y[7:2] ^ 6'h2D)) && draw_x[0] && draw_y[1]));
 
         player_pixel =
-            rect(draw_x, draw_y, player_x + 14, PLAYER_Y, 4, 4) ||
-            rect(draw_x, draw_y, player_x + 10, PLAYER_Y + 4, 12, 6) ||
-            rect(draw_x, draw_y, player_x + 4,  PLAYER_Y + 10, 24, 5) ||
-            rect(draw_x, draw_y, player_x,      PLAYER_Y + 14, PLAYER_W, 4);
-        player_core_pixel = rect(draw_x, draw_y, player_x + 13, PLAYER_Y + 5, 6, 6);
+            rect(draw_x, draw_y, player_x + 14, player_y, 4, 4) ||
+            rect(draw_x, draw_y, player_x + 10, player_y + 4, 12, 6) ||
+            rect(draw_x, draw_y, player_x + 4,  player_y + 10, 24, 5) ||
+            rect(draw_x, draw_y, player_x,      player_y + 14, PLAYER_W, 4);
+        player_core_pixel = rect(draw_x, draw_y, player_x + 13, player_y + 5, 6, 6);
 
         player_bullet_pixel = player_bullet_active &&
             rect(draw_x, draw_y, player_bullet_x, player_bullet_y, PLAYER_BULLET_W, PLAYER_BULLET_H);
