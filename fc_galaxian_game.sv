@@ -34,8 +34,10 @@ module fc_galaxian_game(
     localparam int PLAYER_MIN_Y    = 344;
     localparam int PLAYER_MAX_Y    = 452;
     localparam int PLAYER_STEP     = 5;
+    localparam int PLAYER_MAX_BULLETS = 4;
     localparam int PLAYER_BULLET_W = 4;
     localparam int PLAYER_BULLET_H = 12;
+    localparam int ENEMY_MAX_BULLETS = 4;
     localparam int ENEMY_ROWS      = 4;
     localparam int ENEMY_COLS      = 8;
     localparam int ENEMY_COUNT     = ENEMY_ROWS * ENEMY_COLS;
@@ -60,10 +62,12 @@ module fc_galaxian_game(
     logic       frame_tick;
 
     logic [9:0] player_x, player_y;
-    logic       player_bullet_active;
-    logic [9:0] player_bullet_x, player_bullet_y;
-    logic       enemy_bullet_active;
-    logic [9:0] enemy_bullet_x, enemy_bullet_y;
+    logic [PLAYER_MAX_BULLETS-1:0] player_bullet_active;
+    logic [9:0] player_bullet_x [PLAYER_MAX_BULLETS];
+    logic [9:0] player_bullet_y [PLAYER_MAX_BULLETS];
+    logic [ENEMY_MAX_BULLETS-1:0] enemy_bullet_active;
+    logic [9:0] enemy_bullet_x [ENEMY_MAX_BULLETS];
+    logic [9:0] enemy_bullet_y [ENEMY_MAX_BULLETS];
 
     logic [ENEMY_COUNT-1:0] enemy_alive;
     logic signed [10:0] enemy_base_x;
@@ -82,9 +86,17 @@ module fc_galaxian_game(
     logic key_left, key_right, key_up, key_down, key_fire, key_start, key_restart;
     logic bullet_hit_enemy;
     int   bullet_hit_index;
+    int   bullet_hit_player_bullet_index;
+    logic player_hit_by_enemy;
+    int   player_hit_enemy_bullet_index;
     logic enemy_fire_candidate_valid;
     int   enemy_fire_candidate_index;
     logic [5:0] enemies_remaining;
+    logic player_bullet_free_valid;
+    int   player_bullet_free_index;
+    logic enemy_bullet_free_valid;
+    int   enemy_bullet_free_index;
+    logic [2:0] player_bullet_limit, enemy_bullet_limit;
 
     logic [3:0] score_thousands, score_hundreds, score_tens, score_ones;
 
@@ -95,6 +107,8 @@ module fc_galaxian_game(
     assign key_fire    = (keycode == 8'h2C); // space
     assign key_start   = (keycode == 8'h28) || (keycode == 8'h58) || key_fire; // enter, keypad enter, or fire
     assign key_restart = (keycode == 8'h15); // R
+    assign player_bullet_limit = {1'b0, switches[9:8]} + 3'd1;
+    assign enemy_bullet_limit  = {1'b0, switches[13:12]} + 3'd1;
 
     vga_controller vga_ctrl (
         .Clk       (clk),
@@ -207,18 +221,52 @@ module fc_galaxian_game(
         enemies_remaining = 6'd0;
         bullet_hit_enemy  = 1'b0;
         bullet_hit_index  = 0;
+        bullet_hit_player_bullet_index = 0;
+        player_hit_by_enemy = 1'b0;
+        player_hit_enemy_bullet_index = 0;
         enemy_fire_candidate_valid = 1'b0;
         enemy_fire_candidate_index = 0;
+        player_bullet_free_valid = 1'b0;
+        player_bullet_free_index = 0;
+        enemy_bullet_free_valid = 1'b0;
+        enemy_bullet_free_index = 0;
+
+        for (int b = 0; b < PLAYER_MAX_BULLETS; b++) begin
+            if (!player_bullet_free_valid &&
+                (b < player_bullet_limit) && !player_bullet_active[b]) begin
+                player_bullet_free_valid = 1'b1;
+                player_bullet_free_index = b;
+            end
+        end
+
+        for (int b = 0; b < ENEMY_MAX_BULLETS; b++) begin
+            if (!enemy_bullet_free_valid &&
+                (b < enemy_bullet_limit) && !enemy_bullet_active[b]) begin
+                enemy_bullet_free_valid = 1'b1;
+                enemy_bullet_free_index = b;
+            end
+
+            if (enemy_bullet_active[b] && !player_hit_by_enemy) begin
+                if (overlap(enemy_bullet_x[b], enemy_bullet_y[b], 6, 12,
+                            player_x, player_y, PLAYER_W, PLAYER_H)) begin
+                    player_hit_by_enemy = 1'b1;
+                    player_hit_enemy_bullet_index = b;
+                end
+            end
+        end
 
         for (int i = 0; i < ENEMY_COUNT; i++) begin
             if (enemy_alive[i])
                 enemies_remaining = enemies_remaining + 6'd1;
 
-            if (player_bullet_active && enemy_alive[i] && !bullet_hit_enemy) begin
-                if (overlap(player_bullet_x, player_bullet_y, PLAYER_BULLET_W, PLAYER_BULLET_H,
-                            enemy_x_pos(i), enemy_y_pos(i), ENEMY_W, ENEMY_H)) begin
-                    bullet_hit_enemy = 1'b1;
-                    bullet_hit_index = i;
+            for (int b = 0; b < PLAYER_MAX_BULLETS; b++) begin
+                if (player_bullet_active[b] && enemy_alive[i] && !bullet_hit_enemy) begin
+                    if (overlap(player_bullet_x[b], player_bullet_y[b], PLAYER_BULLET_W, PLAYER_BULLET_H,
+                                enemy_x_pos(i), enemy_y_pos(i), ENEMY_W, ENEMY_H)) begin
+                        bullet_hit_enemy = 1'b1;
+                        bullet_hit_index = i;
+                        bullet_hit_player_bullet_index = b;
+                    end
                 end
             end
 
@@ -295,22 +343,28 @@ module fc_galaxian_game(
                     else if (key_down && (player_y < PLAYER_MAX_Y - PLAYER_STEP))
                         player_y <= player_y + PLAYER_STEP;
 
-                    if (key_fire && !fire_prev && !player_bullet_active && (fire_cooldown == 8'd0)) begin
-                        player_bullet_active <= 1'b1;
-                        player_bullet_x      <= player_x + (PLAYER_W / 2) - (PLAYER_BULLET_W / 2);
-                        player_bullet_y      <= player_y - PLAYER_BULLET_H;
-                        fire_cooldown        <= 8'd10;
+                    if (key_fire && !fire_prev && player_bullet_free_valid && (fire_cooldown == 8'd0)) begin
+                        player_bullet_active[player_bullet_free_index] <= 1'b1;
+                        player_bullet_x[player_bullet_free_index]      <= player_x + (PLAYER_W / 2) - (PLAYER_BULLET_W / 2);
+                        player_bullet_y[player_bullet_free_index]      <= player_y - PLAYER_BULLET_H;
+                        fire_cooldown                                  <= 8'd10;
                     end
-                    else if (player_bullet_active) begin
-                        if (player_bullet_y <= 10'd30)
-                            player_bullet_active <= 1'b0;
-                        else
-                            player_bullet_y <= player_bullet_y - 10'd8;
+
+                    for (int b = 0; b < PLAYER_MAX_BULLETS; b++) begin
+                        if (b >= player_bullet_limit) begin
+                            player_bullet_active[b] <= 1'b0;
+                        end
+                        else if (player_bullet_active[b]) begin
+                            if (player_bullet_y[b] <= 10'd30)
+                                player_bullet_active[b] <= 1'b0;
+                            else
+                                player_bullet_y[b] <= player_bullet_y[b] - 10'd8;
+                        end
                     end
 
                     if (bullet_hit_enemy) begin
                         enemy_alive[bullet_hit_index] <= 1'b0;
-                        player_bullet_active          <= 1'b0;
+                        player_bullet_active[bullet_hit_player_bullet_index] <= 1'b0;
                         if (score_tens != 4'd9) begin
                             score_tens <= score_tens + 4'd1;
                         end
@@ -363,36 +417,38 @@ module fc_galaxian_game(
                         move_timer <= move_timer + 8'd1;
                     end
 
-                    if (enemy_bullet_active) begin
-                        if (enemy_bullet_y >= SCREEN_H - 12) begin
-                            enemy_bullet_active <= 1'b0;
+                    for (int b = 0; b < ENEMY_MAX_BULLETS; b++) begin
+                        if (b >= enemy_bullet_limit) begin
+                            enemy_bullet_active[b] <= 1'b0;
+                        end
+                        else if (enemy_bullet_active[b]) begin
+                            if (enemy_bullet_y[b] >= SCREEN_H - 12)
+                                enemy_bullet_active[b] <= 1'b0;
+                            else
+                                enemy_bullet_y[b] <= enemy_bullet_y[b] + enemy_bullet_speed(difficulty_level);
+                        end
+                    end
+
+                    if (player_hit_by_enemy) begin
+                        enemy_bullet_active[player_hit_enemy_bullet_index] <= 1'b0;
+                        player_bullet_active <= {PLAYER_MAX_BULLETS{1'b0}};
+                        if (lives <= 4'd1) begin
+                            lives <= 4'd0;
+                            state <= ST_GAME_OVER;
                         end
                         else begin
-                            enemy_bullet_y <= enemy_bullet_y + enemy_bullet_speed(difficulty_level);
-                        end
-
-                        if (overlap(enemy_bullet_x, enemy_bullet_y, 6, 12,
-                                    player_x, player_y, PLAYER_W, PLAYER_H)) begin
-                            enemy_bullet_active <= 1'b0;
-                            player_bullet_active <= 1'b0;
-                            if (lives <= 4'd1) begin
-                                lives <= 4'd0;
-                                state <= ST_GAME_OVER;
-                            end
-                            else begin
-                                lives         <= lives - 4'd1;
-                                respawn_timer <= 6'd45;
-                                state         <= ST_LIFE_LOST;
-                            end
+                            lives         <= lives - 4'd1;
+                            respawn_timer <= 6'd45;
+                            state         <= ST_LIFE_LOST;
                         end
                     end
                     else if (enemy_fire_timer >= enemy_fire_period(difficulty_level)) begin
                         enemy_fire_timer <= 8'd0;
-                        if (enemy_fire_candidate_valid) begin
-                            enemy_bullet_active <= 1'b1;
-                            enemy_bullet_x      <= enemy_x_pos(enemy_fire_candidate_index) + (ENEMY_W / 2);
-                            enemy_bullet_y      <= enemy_y_pos(enemy_fire_candidate_index) + ENEMY_H;
-                            attack_cursor       <= enemy_fire_candidate_index[5:0] + 6'd1;
+                        if (enemy_fire_candidate_valid && enemy_bullet_free_valid) begin
+                            enemy_bullet_active[enemy_bullet_free_index] <= 1'b1;
+                            enemy_bullet_x[enemy_bullet_free_index]      <= enemy_x_pos(enemy_fire_candidate_index) + (ENEMY_W / 2);
+                            enemy_bullet_y[enemy_bullet_free_index]      <= enemy_y_pos(enemy_fire_candidate_index) + ENEMY_H;
+                            attack_cursor                                <= enemy_fire_candidate_index[5:0] + 6'd1;
                         end
                     end
                     else begin
@@ -732,11 +788,17 @@ module fc_galaxian_game(
             rect(draw_x, draw_y, player_x,      player_y + 14, PLAYER_W, 4);
         player_core_pixel = rect(draw_x, draw_y, player_x + 13, player_y + 5, 6, 6);
 
-        player_bullet_pixel = player_bullet_active &&
-            rect(draw_x, draw_y, player_bullet_x, player_bullet_y, PLAYER_BULLET_W, PLAYER_BULLET_H);
+        for (int b = 0; b < PLAYER_MAX_BULLETS; b++) begin
+            if (player_bullet_active[b])
+                player_bullet_pixel = player_bullet_pixel ||
+                    rect(draw_x, draw_y, player_bullet_x[b], player_bullet_y[b], PLAYER_BULLET_W, PLAYER_BULLET_H);
+        end
 
-        enemy_bullet_pixel = enemy_bullet_active &&
-            rect(draw_x, draw_y, enemy_bullet_x, enemy_bullet_y, 6, 12);
+        for (int b = 0; b < ENEMY_MAX_BULLETS; b++) begin
+            if (enemy_bullet_active[b])
+                enemy_bullet_pixel = enemy_bullet_pixel ||
+                    rect(draw_x, draw_y, enemy_bullet_x[b], enemy_bullet_y[b], 6, 12);
+        end
 
         for (int i = 0; i < ENEMY_COUNT; i++) begin
             if (enemy_alive[i]) begin
