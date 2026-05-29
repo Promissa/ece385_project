@@ -1,0 +1,14 @@
+Analysis & Synthesis Status : Successful - Sun May 10 21:20:28 2026
+Quartus Prime Version : 18.0.0 Build 614 04/24/2018 SJ Lite Edition
+Revision Name : fc_galaxian
+Top-level Entity Name : fc_galaxian_top
+Family : Cyclone IV E
+Total logic elements : 7,184
+    Total combinational functions : 6,622
+    Dedicated logic registers : 2,028
+Total registers : 2028
+Total pins : 135
+Total virtual pins : 0
+Total memory bits : 76,928
+Embedded Multiplier 9-bit elements : 0
+Total PLLs : 1

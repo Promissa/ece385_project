@@ -1,0 +1,9 @@
+15:03:31 **** Incremental Build of configuration Nios II for project text_mode ****
+make all 
+Info: Building ../text_mode_bsp/
+D:/intelFPGA_lite/18.1/nios2eds/bin/gnu/H-x86_64-mingw32/bin/make --no-print-directory -C ../text_mode_bsp/
+[BSP build complete]
+[text_mode build complete]
+
+15:03:31 Build Finished (took 717ms)
+

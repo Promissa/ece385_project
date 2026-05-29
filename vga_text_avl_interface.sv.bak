@@ -1,0 +1,173 @@
+/************************************************************************
+Avalon-MM Interface VGA Text mode display
+
+Modified for DE2-115 board
+
+Register Map:
+0x000-0x0257 : VRAM, 80x30 (2400 byte, 600 word) raster order (first column then row)
+0x258        : control register
+
+VRAM Format:
+X->
+[ 31  30-24][ 23  22-16][ 15  14-8 ][ 7    6-0 ]
+[IV3][CODE3][IV2][CODE2][IV1][CODE1][IV0][CODE0]
+
+IVn = Draw inverse glyph
+CODEn = Glyph code from IBM codepage 437
+
+Control Register Format:
+[[31-25][24-21][20-17][16-13][ 12-9][ 8-5 ][ 4-1 ][   0    ] 
+[[RSVD ][FGD_R][FGD_G][FGD_B][BKG_R][BKG_G][BKG_B][RESERVED]
+
+VSYNC signal = bit which flips on every Vsync (time for new frame), used to synchronize software
+BKG_R/G/B = Background color, flipped with foreground when IVn bit is set
+FGD_R/G/B = Foreground color, flipped with background when Inv bit is set
+
+************************************************************************/
+`define NUM_REGS 601 //80*30 characters / 4 characters per register
+`define CTRL_REG 600 //index of control register
+
+module vga_text_avl_interface (
+	// Avalon Clock Input, note this clock is also used for VGA, so this must be 50Mhz
+	// We can put a clock divider here in the future to make this IP more generalizable
+	input logic CLK,
+	
+	// Avalon Reset Input
+	input logic RESET,
+	
+	// Avalon-MM Slave Signals
+	input  logic AVL_READ,					// Avalon-MM Read
+	input  logic AVL_WRITE,					// Avalon-MM Write
+	input  logic AVL_CS,					// Avalon-MM Chip Select
+	input  logic [3:0] AVL_BYTE_EN,			// Avalon-MM Byte Enable
+	input  logic [9:0] AVL_ADDR,			// Avalon-MM Address
+	input  logic [31:0] AVL_WRITEDATA,		// Avalon-MM Write Data
+	output logic [31:0] AVL_READDATA,		// Avalon-MM Read Data
+	
+	// Exported Conduit (mapped to VGA port - make sure you export in Platform Designer)
+	output logic [3:0]  red, green, blue,	// VGA color channels (mapped to output pins in top-level)
+	output logic hs, vs,					// VGA HS/VS
+	output logic sync, blank, pixel_clk		// Required by DE2-115 video encoder
+);
+
+logic [31:0] LOCAL_REG       [`NUM_REGS]; // Registers
+logic [9:0] draw_x, draw_y;
+logic [10:0] font_addr;
+logic [7:0] font_data;
+logic [7:0] char_data;
+logic [18:0] word_index;
+logic [4:0] char_row;
+logic [6:0] char_col;
+logic [1:0] byte_index;
+logic glyph_pixel;
+logic invert_pixel;
+logic [3:0] red_next, green_next, blue_next;
+logic vs_d;
+logic frame_sync;
+integer i;
+
+localparam [31:0] DEFAULT_CTRL = (32'h0FFF << 13);
+
+//Declare submodules..e.g. VGA controller, ROMS, etc
+vga_controller vga_ctrl (
+	.Clk      (CLK),
+	.Reset    (RESET),
+	.hs       (hs),
+	.vs       (vs),
+	.pixel_clk(pixel_clk),
+	.blank    (blank),
+	.sync     (sync),
+	.DrawX    (draw_x),
+	.DrawY    (draw_y)
+);
+
+font_rom font0 (
+	.addr(font_addr),
+	.data(font_data)
+);
+
+// Read and write from AVL interface to register block, note that READ waitstate = 1, so this should be in always_ff
+always_ff @(posedge CLK) begin
+	if (RESET) begin
+		for (i = 0; i < `NUM_REGS; i = i + 1) begin
+			LOCAL_REG[i] <= 32'h0;
+		end
+		LOCAL_REG[`CTRL_REG] <= DEFAULT_CTRL;
+		AVL_READDATA <= 32'h0;
+		vs_d <= 1'b0;
+		frame_sync <= 1'b0;
+	end
+	else begin
+		vs_d <= vs;
+		if (~vs_d && vs) begin
+			frame_sync <= ~frame_sync;
+			LOCAL_REG[`CTRL_REG][0] <= ~frame_sync;
+		end
+		else begin
+			LOCAL_REG[`CTRL_REG][0] <= frame_sync;
+		end
+
+		if (AVL_CS && AVL_WRITE) begin
+			if (AVL_ADDR < `CTRL_REG) begin
+				if (AVL_BYTE_EN[0]) LOCAL_REG[AVL_ADDR][7:0]   <= AVL_WRITEDATA[7:0];
+				if (AVL_BYTE_EN[1]) LOCAL_REG[AVL_ADDR][15:8]  <= AVL_WRITEDATA[15:8];
+				if (AVL_BYTE_EN[2]) LOCAL_REG[AVL_ADDR][23:16] <= AVL_WRITEDATA[23:16];
+				if (AVL_BYTE_EN[3]) LOCAL_REG[AVL_ADDR][31:24] <= AVL_WRITEDATA[31:24];
+			end
+			else if (AVL_ADDR == `CTRL_REG) begin
+				if (AVL_BYTE_EN[0]) LOCAL_REG[`CTRL_REG][7:1]   <= AVL_WRITEDATA[7:1];
+				if (AVL_BYTE_EN[1]) LOCAL_REG[`CTRL_REG][15:8]  <= AVL_WRITEDATA[15:8];
+				if (AVL_BYTE_EN[2]) LOCAL_REG[`CTRL_REG][23:16] <= AVL_WRITEDATA[23:16];
+				if (AVL_BYTE_EN[3]) LOCAL_REG[`CTRL_REG][31:24] <= AVL_WRITEDATA[31:24];
+			end
+		end
+
+		if (AVL_CS && AVL_READ) begin
+			AVL_READDATA <= LOCAL_REG[AVL_ADDR];
+		end
+	end
+end
+
+
+//handle drawing (may either be combinational or sequential - or both).
+always_comb begin
+	char_row = draw_y[8:4];
+	char_col = draw_x[9:3];
+	word_index = ({10'h0, char_row, 4'b0} + {12'h0, char_row, 2'b0}) + char_col[6:2];
+	byte_index = char_col[1:0];
+	char_data = LOCAL_REG[word_index][(byte_index * 8) +: 8];
+	invert_pixel = char_data[7];
+	font_addr = {char_data[6:0], draw_y[3:0]};
+	glyph_pixel = font_data[7 - draw_x[2:0]];
+
+	if (!blank) begin
+		red_next = 4'h0;
+		green_next = 4'h0;
+		blue_next = 4'h0;
+	end
+	else if (glyph_pixel ^ invert_pixel) begin
+		red_next = LOCAL_REG[`CTRL_REG][24:21];
+		green_next = LOCAL_REG[`CTRL_REG][20:17];
+		blue_next = LOCAL_REG[`CTRL_REG][16:13];
+	end
+	else begin
+		red_next = LOCAL_REG[`CTRL_REG][12:9];
+		green_next = LOCAL_REG[`CTRL_REG][8:5];
+		blue_next = LOCAL_REG[`CTRL_REG][4:1];
+	end
+end
+
+always_ff @(posedge pixel_clk or posedge RESET) begin
+	if (RESET) begin
+		red <= 4'h0;
+		green <= 4'h0;
+		blue <= 4'h0;
+	end
+	else begin
+		red <= red_next;
+		green <= green_next;
+		blue <= blue_next;
+	end
+end
+
+endmodule
